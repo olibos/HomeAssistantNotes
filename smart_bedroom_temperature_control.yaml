@@ -1,6 +1,8 @@
 blueprint:
   name: Smart Bedroom Temperature Control
-  description: Auto-control shutters and notify for cooling based on sun, temp, and comfort level
+  description: >
+    Automatically manage bedroom shutter based on inside/outside temperature,
+    comfort threshold, sun position, and window state.
   domain: automation
   input:
     bedroom_temp_sensor:
@@ -39,7 +41,7 @@ blueprint:
           min: 18
           max: 28
           step: 0.5
-          unit_of_measurement: °C
+          unit_of_measurement: "°C"
 
     notify_device:
       name: Device to Notify
@@ -47,17 +49,27 @@ blueprint:
         device:
           integration: mobile_app
 
-    sun_azimuth_range:
-      name: (Optional) Sun Azimuth Range
-      description: Limit shutter control to when sun is shining on the window (e.g. 90–270)
-      default: [0, 360]
+    sun_azimuth_min:
+      name: (Optional) Sun Azimuth Minimum
+      description: Only control shutters if sun azimuth is ≥ this value
+      default: 0
       selector:
         number:
-          mode: box
-          multiple: true
           min: 0
           max: 360
           step: 1
+          unit_of_measurement: "°"
+
+    sun_azimuth_max:
+      name: (Optional) Sun Azimuth Maximum
+      description: Only control shutters if sun azimuth is ≤ this value
+      default: 360
+      selector:
+        number:
+          min: 0
+          max: 360
+          step: 1
+          unit_of_measurement: "°"
 
 trigger:
   - platform: time_pattern
@@ -71,29 +83,30 @@ trigger:
   - platform: sun
     event: sunset
 
-action:
-  - variables:
-      bedroom_temp: "{{ states(input.bedroom_temp_sensor) | float(0) }}"
-      outside_temp: "{{ states(input.outdoor_temp_sensor) | float(0) }}"
-      comfort: "{{ input.comfort_temp | float(25) }}"
-      is_window_open: >
-        {% if input.window_sensor %}
-          {{ is_state(input.window_sensor, 'on') }}
-        {% else %}
-          false
-        {% endif %}
-      sun_azimuth: "{{ state_attr('sun.sun', 'azimuth') | float(0) }}"
-      az_min: "{{ input.sun_azimuth_range[0] }}"
-      az_max: "{{ input.sun_azimuth_range[1] }}"
-      is_sun_on_window: >
-        {% if az_max > az_min %}
-          {{ az_min <= sun_azimuth <= az_max }}
-        {% else %}
-          {{ sun_azimuth >= az_min or sun_azimuth <= az_max }}
-        {% endif %}
+variables:
+  bedroom_temp: "{{ states(input.bedroom_temp_sensor) | float(0) }}"
+  outside_temp: "{{ states(input.outdoor_temp_sensor) | float(0) }}"
+  comfort: !input comfort_temp
+  sun_azimuth: "{{ state_attr('sun.sun', 'azimuth') | float(0) }}"
+  az_min: !input sun_azimuth_min
+  az_max: !input sun_azimuth_max
+  is_sun_on_window: >
+    {% if az_max > az_min %}
+      {{ az_min <= sun_azimuth <= az_max }}
+    {% else %}
+      {{ sun_azimuth >= az_min or sun_azimuth <= az_max }}
+    {% endif %}
+  is_window_open: >
+    {% if input.window_sensor %}
+      {{ is_state(input.window_sensor, 'on') }}
+    {% else %}
+      false
+    {% endif %}
 
+action:
   - choose:
-      # Preventive shading
+
+      # 🌞 Preventive shading
       - conditions:
           - condition: numeric_state
             entity_id: !input bedroom_temp_sensor
@@ -113,7 +126,7 @@ action:
             data:
               position: 20  # Mostly closed
 
-      # Cool-down: Room hot, outside cooler
+      # ❄️ Cool-down opportunity
       - conditions:
           - condition: numeric_state
             entity_id: !input bedroom_temp_sensor
@@ -128,11 +141,15 @@ action:
               - service: notify.mobile_app_{{ device_id(input.notify_device) }}
                 data:
                   title: "Cool Down Opportunity"
-                  message: "Bedroom is {{ bedroom_temp }}°C, but it's {{ outside_temp }}°C outside. Consider opening a window."
+                  message: >
+                    Bedroom is {{ bedroom_temp }}°C, but it's only {{ outside_temp }}°C outside.
+                    Consider opening the window to cool down naturally.
             else:
               - service: notify.mobile_app_{{ device_id(input.notify_device) }}
                 data:
-                  title: "Natural Cooling Activated"
-                  message: "Window is open and it's cooler outside ({{ outside_temp }}°C). You can ventilate the bedroom."
+                  title: "Natural Cooling Active"
+                  message: >
+                    Window is open and outside is cooler ({{ outside_temp }}°C).
+                    Let the fresh air in!
 
 mode: restart
